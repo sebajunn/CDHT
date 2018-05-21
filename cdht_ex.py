@@ -45,6 +45,14 @@ PRINTABLE = map(ord, printable)
 COLOR_DEFAULT = -1;
 MIN_REC_WIDTH = 111; #Minimum width required to show longest line of output
 
+# Enumeration type definition
+# By SO community, From: http://stackoverflow.com/a/1695250/1800854
+def enum(**enums):
+  return type('Enum', (), enums);
+
+# Enumns
+
+Ping = enum(REQ=0, RES=1); # Type of Ping signals
 
 # Initialise application, check for valid arguments and initiate curses screen
 def init(argv):
@@ -512,7 +520,6 @@ def TCPMonitor(screen, Ping):
             elif fileStatus == 2:
               # The next peer has the file, send a special message
               sendFTMessage(filehash, 2, senderPeerID, LOCALHOST, peerToPort(succ1));
-              consolePrint(screen, 3, "File " + makeColComp(4, str(filehash).zfill(4)) + " is not stored here. File request message has been forwarded to successor Peer (" + makeColComp(5, str(succ1))  + ").");
 
       conn.close();
     except socket.error:
