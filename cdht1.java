@@ -11,7 +11,7 @@ import java.net.*;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 
-public class cdht {
+public class cdht1 {
 
     public static int peerIdentification;
     public static int temppeerID= 4;
