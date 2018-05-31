@@ -78,7 +78,7 @@ if (flag1 == 0)
         xBias = Wx(n) - bias(1);
         yBias = Wy(n) - bias(2);
         zBias =  -(Wz(n) - bias(3));
-        newAttitude = EulerIntegrate(Wx(n) - bias(1), Wy(n) - bias(2), -(Wz(n) - bias(3)), dt, currentAttitude); 
+        newAttitude = gyroIntegrate(Wx(n) - bias(1), Wy(n) - bias(2), -(Wz(n) - bias(3)), dt, currentAttitude); 
         unbiasedAttitude(n,:) = newAttitude;
         biasedAttitude = unbiasedAttitude - flag1;
     end
@@ -451,7 +451,7 @@ for i=1:L
     %%% Part 3
     % simulate a laser scan
     laserScansL = zz>15;
-    laserScansU = zz<16
+    laserScansU = zz<16;
     ii = find(laserScansL & laserScansU);
     identityFlag = 0;
     if (riskFlag == 0)
@@ -467,39 +467,58 @@ for i=1:L
     
     separationy = diff(yyL);
     separationz = diff(zzL);
-    separationx = diff(xxL);
+    separation = diff(xxL);
     poleCenters = [NaN;NaN];
     poleCentersDiff = [1;1];
     start = 1;
     end1 = 1;
     poleN = 0;
+    loopCatch = numel(xxL)-1;
     
-    for n = 1:numel(xxL)-1
-        
-        if abs(xxL(n) - xxL(n+1)) > 10 || n == numel(xxL)-1 % first check if the current point is 10cm from next, therefore making it the last point of the cluster
-           firstPointX = xxL(start);
-           firstPointY = yyL(start);
-           lastPointX = xxL(n);
-           lastPointY = yyL(n);
-           
-           size = hypot(firstPointX - lastPointX,firstPointY - lastPointY);
-           
-           if (size >= 0.5 && size <= 4) && start == 1
+    
+    for n = 1:loopCatch
+        xxDifference = xxL(n) - xxL(n+1);
+        absDiff = abs(xxDifference)>10;
+        nElements = numel(xxL)-1;
+        nCatch = n == nElements;
+        if absDiff || nCatch % first check if the current point is 10cm from next, therefore making it the last point of the cluster
+           if (end1 == 1)
+               firstPointX = xxL(start);
+               endingPointX = xxL(end1);
+               firstPointY = yyL(start);
+               endingPointy = yyL(end1);
+               lastPointX = xxL(n);
+               lastPointY = yyL(n);
+               xDiff = firstPointX - lastPointX;
+               yDiff = firstPointY - lastPointY;
+               size = sqrt((xDiff).^2 + (yDiff).^2);
                
-               poleN = poleN + 1;
-               poleCenters(1,poleN) = (firstPointX + lastPointX)./2; % x coord
-               poleCenters(2,poleN) = (firstPointY + lastPointY)./2; % y coord                           
-               start = n + 1;
+               sizeL = (size >= 0.5);
+               sizeU = (size <= 4);     
+               
+               size_condition = sizeL && sizeU;
+               if (size_condition) && (start == 1)
+                   if (size_condition)
+                       xSum = firstPointX + lastPointX;
+                       ySum = firstPointY + lastPointY;
+                       poleN = poleN + 1;
+                       poleCenters(1,poleN) = (xSum)./2; % x coord
+                       poleCenters(2,poleN) = (ySum)./2; % y coord                           
+                       start = n + 1;
+                   end
 
-           elseif (size >= 0.5 && size <= 4) && (separation(start-1) < 0 && separation(n) > 0) % check if the cluster is within the size range to be a pole
-                
-               poleN = poleN + 1;
-               poleCenters(1,poleN) = (firstPointX + lastPointX)./2; % x coord
-               poleCenters(2,poleN) = (firstPointY + lastPointY)./2; % y coord                           
-               start = n + 1;
-               
-           else
-               start = n + 1;
+               elseif (size_condition) && (separation(start-1) < 0 && separation(n) > 0) % check if the cluster is within the size range to be a pole
+                   if (size_condition)
+                       xSum = firstPointX + lastPointX;
+                       ySum = firstPointY + lastPointY;
+                       poleN = poleN + 1;
+                       poleCenters(1,poleN) = (xSum)./2; % x coord
+                       poleCenters(2,poleN) = (ySum)./2; % y coord                           
+                       start = n + 1;
+                   end
+               else
+                   start = n + 1;
+               end
            end
         end
     end
@@ -509,193 +528,292 @@ for i=1:L
         %fprintf('Coord. of Pole %d: X = %.3f, Y = %.3f\n', ii, poleCenters(1,ii), poleCenters(2,ii));
     end
        
-    if flag  
-        
-        % Global
-        gPoleCenters = GlobalTransform(poleCenters,myVehicle);
-        set(hGPoles, 'xdata', gPoleCenters(1,:), 'ydata', gPoleCenters(2,:), 'color', 'b');
+    
+    
+    
+    
+    
+    
+    if flag
 
+            % Global
+            gPoleCenters = TransformGlobal(poleCenters,myVehicle);
+            gridCentresL = gPoleCenters(1,:);
+            gridCentresU = gPoleCenters(2,:);
+            %if (flag)
+            set(hGPoles, 'xdata', gridCentresL, 'ydata', gridCentresU, 'color', 'b');
+            AOOI = FindAOOI(gPoleCenters, Landmarks);
+            if (flag)
+                if ~isempty(AOOI.localIndex) % don't do anything if no AOOIs seen
+                       numberOfAOOI = length(AOOI.globalIndex) == 1;
+                       assertNonZero = AOOI.globalIndex ~= 0;
+                       AOOILogic = numberOfAOOI && assertNonZero;
+                       
+                    if AOOILogic
+                        globalAOOI = AOOI.globalIndex;
+                        localAOOI = AOOI.localIndex;
+                        if (AOOI.globalIndex ~= 0)
+                            dx = Landmarks.xy(1,globalAOOI) - gPoleCenters(1,localAOOI);
+                            %unnecessary below
+                            dz = Landmarks.xy(1,globalAOOI) - gPoleCenters(1,localAOOI); 
+                            dy = Landmarks.xy(2,globalAOOI) - gPoleCenters(2,localAOOI);
+                        end
+                        vehicleMoving = 1;
+                        vehicleStillMoving = 1;
+                       
+                        if (vehicleMoving == 1)
+                            vehicleDx = myVehicle.x + dx;
+                            myVehicle.x = vehicleDx;
+                            vehicleDy = myVehicle.y + dy;
+                            myVehicle.y = vehicleDy;
+                            unbiasTheAttitude = unbiasedAttitude(i*54,3);
+                            
+                            vehicleH = initH + unbiasTheAttitude;
+                        end    
+                            myVehicle.h = vehicleH;
+                        if (vehicleStillMoving == 1)     
+                            gPoleUpdateX = gPoleCenters(1,:) + dx;
+                            gPoleUpdatey = gPoleCenters(1,:) + dy;
+                            
+                            gPoleCenters(1,:) = gPoleUpdateX;
+                            gPoleCenters(2,:) = gPoleUpdatey;
+                        end
+                    end
+                    moreThanOneAOOI = length(AOOI.globalIndex) > 1;    
+                   
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    if moreThanOneAOOI
 
-        AOOI = FindAOOI(gPoleCenters, Landmarks);
-        if ~isempty(AOOI.localIndex) % don't do anything if no AOOIs seen
-            if length(AOOI.globalIndex) == 1 && AOOI.globalIndex ~= 0
-                dx = Landmarks.xy(1,AOOI.globalIndex) - gPoleCenters(1,AOOI.localIndex); 
-                dy = Landmarks.xy(2,AOOI.globalIndex) - gPoleCenters(2,AOOI.localIndex);
-                myVehicle.x = myVehicle.x + dx;
-                myVehicle.y = myVehicle.y + dy;
-                myVehicle.h = initH + unbiasedAttitude(i*54,3);
-                gPoleCenters(1,:) = gPoleCenters(1,:) + dx;
-                gPoleCenters(2,:) = gPoleCenters(2,:) + dy;
+                        ogPC = gPoleCenters; % save original untransformed pole center positions
+                        initGuess = [0,0,0];
+                        %options = optimset('Display', 'final');
+
+                        % error = Adjustment(AOOI, gPC, LMs, veh, xshift, yshift, angle)
+                        tic;
+                        mySol = fminsearch(@(guess) Adjustment(AOOI, poleCenters, Landmarks, myVehicle, guess(1), guess(2), guess(3)), initGuess);%, options);
+                        error1 = Adjustment(AOOI, poleCenters, Landmarks, myVehicle, mySol(1), mySol(2), mySol(3));
+                        %disp(error);
+                        
+                        [xshift, yshift] = SecondAdjust(AOOI, poleCenters, Landmarks, myVehicle, mySol(1), mySol(2), mySol(3));
+                        
+                        solXshift = mySol(1) + xshift;
+                        solYShift = mySol(2) + yshift;
+                        
+                        mySol(1) = solXshift;
+                        mySol(2) = solYShift;
+                        
+                        error2 = Adjustment(AOOI, poleCenters, Landmarks, myVehicle, mySol(1), mySol(2), mySol(3));
+                        %disp(error);
+                        toc;
+                        
+                        VehicleX = myVehicle.x + mySol(1);
+                        VehicleY = myVehicle.y + mySol(2);
+                        Vehicleh = myVehicle.h + mySol(3);
+                        vehicleFlag = 0;
+                        
+                        if (vehicleFlag == 0)
+                            myVehicle.x = myVehicle.x + mySol(1);
+                            myVehicle.y = myVehicle.y + mySol(2);
+                            myVehicle.h = myVehicle.h + mySol(3);
+                        end
+                        
+                        gPoleCenters = TransformGlobal(poleCenters,myVehicle);
+
+                    end
+                    error1Hist(end+1) = error1;
+                    error2Hist(end+1) = error2;
+
+                    raySector = linspace(0,200,101);
+                    zerosSector = zeros(1,length(linspace(0,200,101)));
+                    
+                    ray = [raySector; zerosSector];
+                    angle = 60;
+                    angView = deg2rad(angle);
+                    myAngle = angView/2 ;
+                    angView = linspace(-myAngle,myAngle,angle);
+                    rays = RayTransform(ray, myVehicle, angView);
+                    
+                    if (vehicleFlag == 0)
+                        rayIndex = myPopulateRays(rays);
+                        PopulatePC(gPoleCenters, rayIndex);
+                        myPopulateVeh(myVehicle);
+                    end
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    set(MyContext.handle, 'cdata', MyContext.M);
+                    vehicleX = myVehicle.x;
+                    vehicleY = myVehicle.y;
+                    vehicleH = myVehicle.h;
+                    initalDcos = initD*cos(myVehicle.h);
+                    initalDsin = initD*sin(myVehicle.h);
+                    vehicleHist(:,end+1) = [vehicleX; vehicleY; vehicleH];
+                    vHist1 = vehicleHist(1,:);
+                    vHist2 = vehicleHist(2,:);
+                    histError1 = error1Hist(:);
+                    histError2 = error2Hist(:);
+                    histLength1 = 1:length(error1Hist);
+                    histLength2 = 1:length(error2Hist)
+                    
+                    
+                    gPoleCenters1 = gPoleCenters(1,:);
+                    gPoleCenters2 = gPoleCenters(2,:);
+                    
+                    set(hGPoles, 'xdata', gPoleCenters1, 'ydata', gPoleCenters2, 'color', 'r');
+                    set(hVehicle, 'xdata', vehicleX, 'ydata', vehicleY, 'udata', initalDcos, 'vdata', initalDsin);
+                    
+                    set(myhPath, 'xdata', vHist1, 'ydata', vHist2);
+                    
+                    set(hError1, 'ydata', histError1(:), 'xdata', histLength1);
+                    set(hError2, 'ydata', histError2(:), 'xdata', histLength2);
+                end
             end
-            
-            if length(AOOI.globalIndex) > 1
-                
-                ogPC = gPoleCenters; % save original untransformed pole center positions
-                initGuess = [0,0,0];
-                %options = optimset('Display', 'final');
-           
-                % error = Adjustment(AOOI, gPC, LMs, veh, xshift, yshift, angle)
-                tic;
-                sol = fminsearch(@(guess) Adjustment(AOOI, poleCenters, Landmarks, myVehicle, guess(1), guess(2), guess(3)), initGuess);%, options);
-                error1 = Adjustment(AOOI, poleCenters, Landmarks, myVehicle, sol(1), sol(2), sol(3));
-                %disp(error);
-                [xshift, yshift] = SecondAdjust(AOOI, poleCenters, Landmarks, myVehicle, sol(1), sol(2), sol(3));
-                sol(1) = sol(1) + xshift;
-                sol(2) = sol(2) + yshift;
-                error2 = Adjustment(AOOI, poleCenters, Landmarks, myVehicle, sol(1), sol(2), sol(3));
-                %disp(error);
-                toc;
-                
-                myVehicle.x = myVehicle.x + sol(1);
-                myVehicle.y = myVehicle.y + sol(2);
-                myVehicle.h = myVehicle.h + sol(3);
-                gPoleCenters = GlobalTransform(poleCenters,myVehicle);
-%                 gPoleCenters(1,:) = gPoleCenters(1,:) + sol(1);
-%                 gPoleCenters(2,:) = gPoleCenters(2,:) + sol(2);
-            end
-            error1Hist(end+1) = error1;
-            error2Hist(end+1) = error2;
-            
-%             ray1 = linspace(0,200,101);
-%             ray1 = [ray1;zeros(1,length(ray1))];
-%             ray2 = ray1;
-%             angView = deg2rad(60);
-%             ray1 = RayTransform(ray1, vehicle, angView/2);
-%             ray2 = RayTransform(ray2, vehicle, -angView/2);
+            %disp(vehicle);
 
-            ray = [linspace(0,200,101); zeros(1,length(linspace(0,200,101)))];
-            angView = deg2rad(60);
-            angView = linspace(-angView/2,angView/2,60);
-            rays = RayTransform(ray, myVehicle, angView);
-            
-            rayIndex = myPopulateRays(rays);
-            PopulatePC(gPoleCenters, rayIndex);
-            myPopulateVeh(myVehicle);
-            
-            set(MyContext.handle, 'cdata', MyContext.M);
-     
-            vehicleHist(:,end+1) = [myVehicle.x; myVehicle.y; myVehicle.h];
-            set(hGPoles, 'xdata', gPoleCenters(1,:), 'ydata', gPoleCenters(2,:), 'color', 'r');
-            set(hVehicle, 'xdata', myVehicle.x, 'ydata', myVehicle.y, 'udata', initD*cos(myVehicle.h), 'vdata', initD*sin(myVehicle.h));
-            set(hPath, 'xdata', vehicleHist(1,:), 'ydata', vehicleHist(2,:));
-            set(hError1, 'ydata', error1Hist(:), 'xdata', 1:length(error1Hist));
-            set(hError2, 'ydata', error2Hist(:), 'xdata', 1:length(error2Hist));
-        end
-        
-        %disp(vehicle);
-        
-        % Plot
-        set(h1,'cdata',Depth);
-        set(h2,'xdata',xx(1:end),'ydata',yy(1:end),'zdata',zz(1:end));
-        set(hRisk, 'xdata',riskxx,'ydata',riskyy,'zdata',riskzz);
-        set(hLaser,'xdata',xxL,'ydata',yyL,'zdata',zzL);
-        s = sprintf('Depth at time [%.3f] secs',laserTimes(i));
-        set(titleHandle,'string',s);
+            % Plot
+            set(h1,'cdata',Depth);
+            set(h2,'xdata',xx(1:end),'ydata',yy(1:end),'zdata',zz(1:end));
+            set(hRisk, 'xdata',riskxx,'ydata',riskyy,'zdata',riskzz);
+            set(hLaser,'xdata',xxL,'ydata',yyL,'zdata',zzL);
+            s = sprintf('Depth at time [%.3f] secs',laserTimes(i));
+            set(titleHandle,'string',s);
 
-        dataPts = times<laserTimes(i);
-        set(hRoll,'xdata',times(dataPts),'ydata',unbiasedAttitude(dataPts,1)*k);
-        set(hRoll2,'xdata',laserTimes(1:i),'ydata',myRollData(1:i));
-        set(hPitch,'xdata',times(dataPts),'ydata',unbiasedAttitude(dataPts,2)*k);
-        set(hPitch2,'xdata',laserTimes(1:i),'ydata',myPitchData(1:i));
-        set(hYaw,'xdata',times(dataPts),'ydata',unbiasedAttitude(dataPts,3)*k);
+            dataPts = times<laserTimes(i);
+            set(hRoll,'xdata',times(dataPts),'ydata',unbiasedAttitude(dataPts,1)*k);
+            set(hRoll2,'xdata',laserTimes(1:i),'ydata',myRollData(1:i));
+            set(hPitch,'xdata',times(dataPts),'ydata',unbiasedAttitude(dataPts,2)*k);
+            set(hPitch2,'xdata',laserTimes(1:i),'ydata',myPitchData(1:i));
+            set(hYaw,'xdata',times(dataPts),'ydata',unbiasedAttitude(dataPts,3)*k);
 
-        set(h2dLaser, 'xdata', xxL, 'ydata', yyL);
-        set(hPoles, 'xdata', poleCenters(1,:), 'ydata', poleCenters(2,:));
-        s = sprintf('Simulated laser scan at time [%.3f] secs',laserTimes(i));
-        set(laserTitleHandle,'string',s);
+            set(h2dLaser, 'xdata', xxL, 'ydata', yyL);
+            set(hPoles, 'xdata', poleCenters(1,:), 'ydata', poleCenters(2,:));
+            s = sprintf('Simulated laser scan at time [%.3f] secs',laserTimes(i));
+            set(laserTitleHandle,'string',s);
 
-    else   %First time: we create Matlab graphical objects
-        flag=1;
-        figure(1) ; clf() ;  
+        else   %First time: we create Matlab graphical objects
+            flag=1;
+            figure(1) ; clf() ;  
 
-        subplot(211) ; h1 = imagesc(Depth,[100,2000]); % displayed with scaled colours
-        % image, scalling color for values in range from 100mm to 2000.
+            subplot(211) ; h1 = imagesc(Depth,[100,2000]); % displayed with scaled colours
+            % image, scalling color for values in range from 100mm to 2000.
 
-        set(gca(),'xdir','reverse'); % gca = get current axis   
-        % this way, that image looks better (for human brains..)
-        colormap gray ; 
-        zoom on;   %title('Depth, shown as an image');
-        
-        titleHandle = title('');
-        
-        uicontrol('Style','pushbutton','String','Pause/Cont.','Position',[10,1,80,20],'Callback',{@CallBackFuncA,1});
-   
-        
-        subplot(212);
-        h2 = plot3(xx(1:end),yy(1:end),zz(1:end),'.b','markersize',0.5); hold on;
-        hRisk = plot3(0,0,0,'.r','markersize',1);
-        hLaser = plot3(0,0,0,'.g','markersize',1);
-        
-        axis([0,200,-125,125,-40,60]); 
-        rotate3d on; grid on;
-        xlabel('X (cm)'); ylabel('Y (cm)'); zlabel('Z (cm)');
-        title('3D Points Cloud (view from camera)');
-        hold on;
-        
-        figure(2); clf(); hold on;
+            set(gca(),'xdir','reverse'); % gca = get current axis   
+            % this way, that image looks better (for human brains..)
+            colormap gray ; 
+            zoom on;   %title('Depth, shown as an image');
 
-        subplot(3,1,1), hRoll = plot(times,unbiasedAttitude(:,1)*k); hold on;
-        subplot(3,1,1), hRoll2 = plot(0,0,'r-');
-        title('Estimated Roll');
-        xlabel('Time (seconds)');
-        ylabel('Angle (degrees)');
-        legend({'Gyro Data','Floor Data'});
-        grid on;
+            titleHandle = title('');
 
-        subplot(3,1,2), hPitch = plot(times,unbiasedAttitude(:,2)*k); hold on;
-        subplot(3,1,2), hPitch2 = plot(0,0,'r-');
-        title('Estimated Pitch');
-        xlabel('Time (seconds)');
-        ylabel('Angle (degrees)');
-        legend({'Gyro Data','Floor Data'});
-        grid on;
+            uicontrol('Style','pushbutton','String','Pause/Cont.','Position',[10,1,80,20],'Callback',{@CallBackFuncA,1});
 
-        subplot(3,1,3), hYaw = plot(times,unbiasedAttitude(:,3)*k); hold on;
-        title('Estimated Yaw');
-        xlabel('Time (seconds)');
-        ylabel('Angle (degrees)');
-        grid on;
+
+            subplot(212);
+            h2 = plot3(xx(1:end),yy(1:end),zz(1:end),'.b','markersize',0.5); hold on;
+            hRisk = plot3(0,0,0,'.r','markersize',1);
+            hLaser = plot3(0,0,0,'.g','markersize',1);
+
+            axis([0,200,-125,125,-40,60]); 
+            rotate3d on; grid on;
+            xlabel('X (cm)'); ylabel('Y (cm)'); zlabel('Z (cm)');
+            title('3D Points Cloud (view from camera)');
+            hold on;
+
+            figure(2); clf(); hold on;
+
+            subplot(3,1,1), hRoll = plot(times,unbiasedAttitude(:,1)*k); hold on;
+            subplot(3,1,1), hRoll2 = plot(0,0,'r-');
+            title('Estimated Roll');
+            xlabel('Time (seconds)');
+            ylabel('Angle (degrees)');
+            legend({'Gyro Data','Floor Data'});
+            grid on;
+
+            subplot(3,1,2), hPitch = plot(times,unbiasedAttitude(:,2)*k); hold on;
+            subplot(3,1,2), hPitch2 = plot(0,0,'r-');
+            title('Estimated Pitch');
+            xlabel('Time (seconds)');
+            ylabel('Angle (degrees)');
+            legend({'Gyro Data','Floor Data'});
+            grid on;
+
+            subplot(3,1,3), hYaw = plot(times,unbiasedAttitude(:,3)*k); hold on;
+            title('Estimated Yaw');
+            xlabel('Time (seconds)');
+            ylabel('Angle (degrees)');
+            grid on;
+
+            figure(3); clf(); hold on;
+            h2dLaser = plot(0,0,'b.');
+            hPoles = plot(0,0,'r*','markersize',10);
+            laserTitleHandle = title('Simulated Laser Scan');
+            xlabel('X-Axis (cm)');
+            ylabel('Y-Axis (cm)');
+            grid on;
+            axis([0,200,-100,100]);
+
+            uicontrol('Style','pushbutton','String','Pause/Cont.','Position',[10,1,80,20],'Callback',{@CallBackFuncA,1});
+
+            figure(4); clf(); hold on;
+            initD = 40; initH = 89*pi/180;
+            myVehicle.x = 25; myVehicle.y = 105; myVehicle.h = initH;
+            vehicleHist(:,1) = [myVehicle.x; myVehicle.y; myVehicle.h];
+            hVehicle = quiver(0,0,initD*cos(initH),initD*sin(initH),'r');
+            hGPoles = plot(0,0,'r+','markersize',8);
+            grid on;
+            plot(Landmarks.xy(1,:),Landmarks.xy(2,:),'b*');
+            myhPath = plot(vehicleHist(1,:),vehicleHist(2,:),'k-');
+            ax=axis();
+            ax=ax+[-10,10,-10,10] ; axis(ax);
+            xlabel('X (cm)');
+            ylabel('Y (cm)');
+            %title('Landmarks and initial pose of robot');
         
-        figure(3); clf(); hold on;
-        h2dLaser = plot(0,0,'b.');
-        hPoles = plot(0,0,'r*','markersize',10);
-        laserTitleHandle = title('Simulated Laser Scan');
-        xlabel('X-Axis (cm)');
-        ylabel('Y-Axis (cm)');
-        grid on;
-        axis([0,200,-100,100]);
-        
-        uicontrol('Style','pushbutton','String','Pause/Cont.','Position',[10,1,80,20],'Callback',{@CallBackFuncA,1});
-        
-        figure(4); clf(); hold on;
-        initD = 40; initH = 89*pi/180;
-        myVehicle.x = 25; myVehicle.y = 105; myVehicle.h = initH;
-        vehicleHist(:,1) = [myVehicle.x; myVehicle.y; myVehicle.h];
-        hVehicle = quiver(0,0,initD*cos(initH),initD*sin(initH),'r');
-        hGPoles = plot(0,0,'r+','markersize',8);
-        grid on;
-        plot(Landmarks.xy(1,:),Landmarks.xy(2,:),'b*');
-        hPath = plot(vehicleHist(1,:),vehicleHist(2,:),'k-');
-        ax=axis();
-        ax=ax+[-10,10,-10,10] ; axis(ax);
-        xlabel('X (cm)');
-        ylabel('Y (cm)');
-        %title('Landmarks and initial pose of robot');
-        
-        figure(5);
-        error1Hist(1) = 0;
-        error2Hist(1) = 0;
-        hError1 = plot(error1Hist,1,'r-');
-        hold on;
-        hError2 = plot(error2Hist,1,'b-');
-        grid on;
-        ylabel('Error');
-        xlabel('Count');
-        legend({'fminsearch','fmin+adjust'});
+            figure(5);
+            histBase = 0;
+            error1Hist(1) = histBase;
+            error2Hist(1) = histBase;
+            hError1 = plot(error1Hist,1,'r-');
+            hold on;
+            hError2 = plot(error2Hist,1,'b-');
+            grid on;
+            ylabel('Error');
+            xlabel('Count');
+            legend({'fminsearch','fmin+adjust'});
         
 
     end
-
+    
     pause(0.1);  
     
     while (ABCD.flagPause), pause(0.2) ; continue ; end
@@ -704,134 +822,217 @@ end
           
     disp('Done....');
 
-function newAtt = EulerIntegrate(Wx, Wy, Wz, dt, curAtt)
+    
+    
+    
+    
+    
+    
+function newAttitude = gyroIntegrate(Wx, Wy, Wz, dt, curAtt)
   
     curRoll = curAtt(1);
     curPitch = curAtt(2);
     curYaw = curAtt(3);
-
+    
     newRoll = curRoll + dt * (Wx + (Wy * sin(curAtt(1)) + Wz * cos(curAtt(1))) * tan(curAtt(2)));
     newPitch = curPitch + dt * (Wy*cos(curAtt(1)) - Wz*sin(curAtt(1)));
     newYaw = curYaw + dt * ((Wy*sin(curAtt(1)) + Wz*cos(curAtt(1)))/cos(curAtt(2)));
     
-    newAtt = [newRoll, newPitch, newYaw];
+    newAttitude = [newRoll, newPitch, newYaw];
     
 return;
 
 end
 
-function gPC = GlobalTransform(PC,veh)
-    angle = veh.h - pi/2;
-    trMat = [cos(angle) -sin(angle); sin(angle) cos(angle)];
-    gPC = trMat*[-PC(2,:); PC(1,:)] + [veh.x; veh.y];
-end
-
-function rays = RayTransform(ray,veh,vang)
-    angle = veh.h + vang;
-    j = 1;
-    for i = 1:length(vang)
-        
-        anglei = angle(i);
-        trMat = [cos(anglei) -sin(anglei); sin(anglei) cos(anglei)];
-        rays(j:j+1,:) = trMat*ray + [veh.x; veh.y];
-        j = j + 2;
+function gPC = TransformGlobal(PC,veh)
+    ninety = pi/2;
+    if (ninety > 0 )
+        angle = veh.h - ninety;
+        twoDTransMatrixT = [cos(angle) -sin(angle)];
+        twoDTransMatrixB = [sin(angle) cos(angle)];
+        trMat = [twoDTransMatrixT; twoDTransMatrixB];
+        vehTotal = [veh.x; veh.y];
+        PCarray = [-PC(2,:); PC(1,:)];
+        transformedPCarray = trMat*PCarray;
+        gPC = transformedPCarray + vehTotal;
     end
 end
 
+function rays = RayTransform(ray,veh,vang)
+    tempVeh = veh.h;
+    tempVang = vang;
+    angle = tempVeh + tempVang;
+    j = 1;
+    if (j == 1)
+        i = 1;
+        loopCatch = 1:length(vang);
+        for i = loopCatch
+            anglei = angle(i);
+            
+            twoDTransMatrixT = [cos(anglei) -sin(anglei)];
+            twoDTransMatrixB = [sin(anglei) cos(anglei)];
+            trMat = [twoDTransMatrixT; twoDTransMatrixB];
+            vehTotal = [veh.x; veh.y];
+            transformedRay = trMat*ray;
+            rays(j:j+1,:) = transformedRay + vehTotal;
+            j = j + 2;
+        end
+    end
+end
+
+
+
 function error = Adjustment(AOOI, PC, LMs, veh, xshift, yshift, angle)
     error = 0;
-%     gPC = gPC - [veh.x; veh.y]; % bring back to origin
-%     trMat = [cos(angle) -sin(angle); sin(angle) cos(angle)];
-%     gPC = trMat*gPC + [veh.x + xshift; veh.y + yshift]; % set back to original position
-    angle = veh.h - pi/2 + angle;
-    trMat = [cos(angle) -sin(angle); sin(angle) cos(angle)];
-    gPC = trMat*[-PC(2,:); PC(1,:)] + [veh.x + xshift; veh.y + yshift];
-    
-    for ii = 1:length(AOOI.globalIndex)
-        if AOOI.globalIndex(ii) ~= 0
-            gI = AOOI.globalIndex(ii);
-            lI = AOOI.localIndex(ii);
-            dx = LMs.xy(1,gI) - gPC(1,lI);
-            dy = LMs.xy(2,gI) - gPC(2,lI);
-            error = error + hypot(dx,dy);
+    flag1 = 0;
+    if (flag1 == 0)
+        vehAngle = veh.h - pi/2;
+        angle = vehAngle + angle;
+    end    
+    twoDTransMatrixT = [cos(angle) -sin(angle)];
+    twoDTransMatrixB = [sin(angle) cos(angle)];
+    trMat = [twoDTransMatrixT; twoDTransMatrixB];
+    xShift = veh.x + xshift;
+    yShift = veh.y + yshift;
+    gPC = trMat*[-PC(2,:); PC(1,:)] + [xShift; yShift];
+    loopCatch = 1:length(AOOI.globalIndex);
+    for ii = loopCatch
+        flag1 = 0;
+        if (flag1 == 0)
+            if AOOI.globalIndex(ii) ~= 0
+                gI = AOOI.globalIndex(ii);
+                lI = AOOI.localIndex(ii);
+                if(flag1 == 0)
+                    LMS1 = LMs.xy(1,gI);
+                    LMS2 = LMs.xy(2,gI);
+                    LMSxy1 = LMS1 - gPC(1,lI);
+                    LMSxy2 = LMS2 - gPC(2,lI);
+                    dx = LMSxy1;
+                    dy = LMSxy2;  
+                    error = error + sqrt(dx.^2 + dy.^2);
+                end
+            end
         end
     end
 
 end
 
 function [xshift, yshift] = SecondAdjust(AOOI, PC, LMs, veh, xshift, yshift, angle)
-
-    angle = veh.h - pi/2 + angle;
-    trMat = [cos(angle) -sin(angle); sin(angle) cos(angle)];
-    gPC = trMat*[-PC(2,:); PC(1,:)] + [veh.x + xshift; veh.y + yshift];
-    
-    dx = realmax*ones(1,length(AOOI.globalIndex));
-    dy = realmax*ones(1,length(AOOI.globalIndex));
-    for ii = 1:length(AOOI.globalIndex)
-
-        if AOOI.globalIndex(ii) ~= 0
-            gI = AOOI.globalIndex(ii);
-            lI = AOOI.localIndex(ii);
-            dx(ii) = LMs.xy(1,gI) - gPC(1,lI);
-            dy(ii) = LMs.xy(2,gI) - gPC(2,lI);
+    flag1 = 0;
+    if (flag1 == 0)
+        vehAngle = veh.h - pi/2;
+        angle = vehAngle + angle;
+        twoDTransMatrixT = [cos(angle) -sin(angle)];
+        twoDTransMatrixB = [sin(angle) cos(angle)];
+        trMat = [twoDTransMatrixT; twoDTransMatrixB];
+        gPC = trMat*[-PC(2,:); PC(1,:)] + [veh.x + xshift; veh.y + yshift];
+        lengthOfGlobalAOOI = length(AOOI.globalIndex);
+        if (flag1 == 0)
+            dx = realmax*ones(1,lengthOfGlobalAOOI);
+            dz = realmax*ones(1,lengthOfGlobalAOOI);
+            dy = realmax*ones(1,lengthOfGlobalAOOI);
+        end
+    end
+    loopCatch = 1:lengthOfGlobalAOOI;
+    for ii = loopCatch
+        if (flag1 == 0)
+            if AOOI.globalIndex(ii) == 0;
+            elseif AOOI.globalIndex(ii) ~= 0
+                gI = AOOI.globalIndex(ii);
+                lI = AOOI.localIndex(ii);
+                LMSxy1 = LMs.xy(1,gI)- gPC(1,lI);
+                LMSxy2 = LMs.xy(2,gI)- gPC(2,lI);
+                dx(ii) = LMSxy1;
+                dy(ii) = LMSxy2;
+            end
         end
     end
     
     xshift = 0;
     yshift = 0;
-    if min(dx) > 0  % all dx are same sign, so shift
-        xshift = min(dx);
-    elseif max(dx) < 0 % all dx are same sign, so shift
-        xshift = max(dx);
-    end
-    if min(dy) > 0 
-        yshift = min(dy);
-    elseif max(dy) < 0
-        yshift = max(dy);
-    end
-        
+    if(xshift == 0 && yshift == 0)
+        minLogicX = min(dx) > 0;
+        maxLogicX = max(dx) < 0;
+        minLogicY = min(dy) > 0;
+        maxLogicY = min(dy) < 0;
+        allDefined = 1;
+        if (allDefined == 1)
+            if minLogicX  % all dx are same sign, so shift
+                xshift = min(dx);
+            elseif maxLogicX % all dx are same sign, so shift
+                xshift = max(dx);
+            end
+            if minLogicY > 0 
+                yshift = min(dy);
+            elseif maxLogicY < 0
+                yshift = max(dy);
+            end
+        end
+    end   
 end
 
 function AOOI = FindAOOI(gPC, LMs)
     %disp(gPC);
     %disp(LMs);
+    flag1 = 0;
+    flag2 = 0;
+    flag3 = 0;
+    flag4 = 0;   
+    
+    AOOIList = [];
     AOOI.globalIndex = [];
     AOOI.localIndex = [];
+    if (flag1 == 0)
+        loopCatch = 1:numel(gPC)/2;
+        for i = loopCatch
+            if (i > 0)
+                loopCatch2 = 1:length(LMs.xy);
+                for j = loopCatch2
+                    if (loopCatch2(1) == 1)
+                        dx = gPC(1,i) - LMs.xy(1,j);
+                    end
+                    if (loopCatch2(1) == 1)
+                        dy = gPC(2,i) - LMs.xy(2,j);
+                    end
+                    dist = sqrt(dx.^2 + dy.^2);
+                    checkIf15 = dist < 15;
+                    if checkIf15
+                        AOOI.globalIndex(i) = j;
+                        break;
+                    else
+                        AOOI.globalIndex(i) = 0;
+                    end          
+                end
+            end
+        end 
+    end
 
-    for i = 1:numel(gPC)/2
-        for j = 1:length(LMs.xy)
-            dx = gPC(1,i) - LMs.xy(1,j);
-            dy = gPC(2,i) - LMs.xy(2,j);
-            dist = hypot(dx,dy);
-           
-            if dist < 15
-                AOOI.globalIndex(i) = j;
-                break;
-            else
-                AOOI.globalIndex(i) = 0;
-            end          
-        end
-    end 
-    
-    %AOOI.globalIndex = AOOI.globalIndex(AOOI.globalIndex > 0);
-    %AOOI.localIndex = AOOI.localIndex(AOOI.localIndex > 0);
     
     AOOI.globalIndex = unique(AOOI.globalIndex,'stable');
-       
-    for i = 1:length(unique(AOOI.globalIndex))
-        if AOOI.globalIndex(i) ~= 0
-            minDist = realmax;
-            
-            for j = 1:numel(gPC)/2
-                dx = LMs.xy(1,AOOI.globalIndex(i)) - gPC(1,j);
-                dy = LMs.xy(2,AOOI.globalIndex(i)) - gPC(2,j);
-                dist = hypot(dx,dy);
+    if (flag1 == 0)   
+        numberOfUniqueAOOI = 1:length(unique(AOOI.globalIndex));
+        for i = numberOfUniqueAOOI
+            nonEmptyAOOIList = AOOI.globalIndex(i) ~= 0;
+            if AOOI.globalIndex(i) == 0   
+                
+            elseif nonEmptyAOOIList
+                minDist = realmax;
+                maxDist = realmax;
+                if (minDist == realmax)
+                    loopCatch3 = 1:numel(gPC)/2;
+                    for j = loopCatch3
+                        LMs1 = LMs.xy(1,AOOI.globalIndex(i));
+                        LMs2 = LMs.xy(2,AOOI.globalIndex(i));
+                        dx = LMs1 - gPC(1,j);
+                        dy = LMs2 - gPC(2,j);
+                        dist = sqrt(dx.^2 + dy.^2);
+                        if dist < minDist
+                            minDist = dist;
+                            AOOI.localIndex(i) = j;
+                        end
 
-                if dist < minDist
-                    minDist = dist;
-                    AOOI.localIndex(i) = j;
+                    end
                 end
-
             end
         end
     end
@@ -843,12 +1044,17 @@ function CreateOG( )
     % Define a structure, with parameters useful for processing an Occupancy
     % Grid.
     % here I define a Matrix for storing the values of the OG (I call it "M")
-    flagDefine
-    MyContext.M = zeros(MyContext.Ny,MyContext.Nx,'double') ;
+    flagDefineContext = 0;
+    if (flagDefineContext == 0)
+        MyContext.M = zeros(MyContext.Ny,MyContext.Nx,'double') ;
+    else
+        disp('Please enter correct Context');
+    end
     % These constants are useful for scaling (x,y) points to cells' indexes.
-                  
-    MyContext.Cx = MyContext.Nx/(MyContext.x2-MyContext.x1) ;
-    MyContext.Cy = MyContext.Ny/(MyContext.y2-MyContext.y1) ;
+    xContext = MyContext.x2-MyContext.x1;
+    yContext = MyContext.y2-MyContext.y1;
+    MyContext.Cx = MyContext.Nx/(xContext) ;
+    MyContext.Cy = MyContext.Ny/(yContext) ;
     return;
 end
 % ...........................................................
@@ -868,7 +1074,7 @@ function PopulatePC(gPC, myRayIndex)
         catchX4 = myY<MyContext.y2;
         catchFindFlag = 0;
         if (catchFindFlag == 0)
-            ii = find((myX>=MyContext.x1)&(myX<MyContext.x2)&(myY>=MyContext.y1)&(myY<MyContext.y2));
+            ii = find((catchX1)&(catchX2)&(catchX3)&(catchX4));
             myX=myX(ii) ; myY=myY(ii) ;
         end
     end
@@ -903,18 +1109,30 @@ function PopulatePC(gPC, myRayIndex)
         previousPosition2 = find(MyContext.M ~= 0);
         previousPosition = intersect(previousPosition,myRayIndex);
     end
-    position = 0.05
+    position = 0.05;
     updatePrevious = MyContext.M(previousPosition) - position;
     logicCatch = MyContext.M < 0;
     MyContext.M(previousPosition) = updatePrevious;
-    MyContext.M(MyContext.M < 0) = 0;
-    MyContext.M(i_xy) = 0.5;
+    context = MyContext.M < 0;
+    MyContext.M(context) = 0;
+    xyLimit = 0.5;
+    MyContext.M(i_xy) = xyLimit;
     
-%     prevPos = find(MyContext.M <= 0.7 & MyContext.M ~= 0);
-%     MyContext.M(prevPos) = MyContext.M(prevPos) - 0.05;
-%     negVal = find(MyContext.M < 0);
-%     MyContext.M(negVal) = 0;
-%     MyContext.M(ixy) = 0.7;
+end
+
+function CallBackFuncA(~,~,x)  % function for buttons
+    global MyContext
+    global ABCD;
+    flagInternal = 0;    
+    if (flagInteral == 0)
+        if (x~=1)
+        else
+           flagPause = 0;
+           switchOnOff = 0;
+           ABCD.flagPause = ~ABCD.flagPause; %Switch ON->OFF->ON -> and so on.
+           return;
+        end
+    end
 end
 
 function myPopulateVeh(vehValue)
@@ -935,7 +1153,7 @@ function myPopulateVeh(vehValue)
         catchX4 = myY<MyContext.y2;
         catchFindFlag = 0;
         if (catchFindFlag == 0)
-            ii = find((myX>=MyContext.x1)&(myX<MyContext.x2)&(myY>=MyContext.y1)&(myY<MyContext.y2));
+            ii = find((catchX1)&(catchX2)&(catchX3)&(catchX4));
             myX=myX(ii) ; myY=myY(ii) ;
         end
     end
@@ -946,7 +1164,7 @@ function myPopulateVeh(vehValue)
     contX1 = MyContext.x1;
     contY1 = MyContext.y1;
     floorNum1 = (myX-contX1);
-    floorNum2 = (myY-contY1)
+    floorNum2 = (myY-contY1);
     iz = 0;
     ix = floor(floorNum1*floorInputX)+1 ;
     iy = floor(floorNum2*floorInputY)+1 ;
@@ -954,7 +1172,7 @@ function myPopulateVeh(vehValue)
     subDivide = 0;
     if (subDivide == 0)
         contextM = MyContext.M;
-        sizeContextM = size(contextM)
+        sizeContextM = size(contextM);
         i_xy = sub2ind(sizeContextM,iy,ix) ;
         ixx = ix;
         iyy = iy;
@@ -970,7 +1188,7 @@ function myPopulateVeh(vehValue)
             MyContext.M(myPreviousPosition) = 0.9;
         end
     end
-    MyContextAssume = 0.95
+    MyContextAssume = 0.95;
     MyContext.M(i_xy) = 0.95;
 end
 
@@ -1016,7 +1234,7 @@ function indexOfRay = myPopulateRays(rays)
     contX1 = MyContext.x1;
     contY1 = MyContext.y1;
     floorNum1 = (myX-contX1);
-    floorNum2 = (myY-contY1)
+    floorNum2 = (myY-contY1);
     iz = 0;
     ix = floor(floorNum1*floorInputX)+1 ;
     iy = floor(floorNum2*floorInputY)+1 ;
@@ -1024,7 +1242,7 @@ function indexOfRay = myPopulateRays(rays)
     subDivide = 0;
     if (subDivide == 0)
         contextM = MyContext.M;
-        sizeContextM = size(contextM)
+        sizeContextM = size(contextM);
         i_xy = sub2ind(sizeContextM,iy,ix) ;
         ixx = ix;
         iyy = iy;
@@ -1052,18 +1270,4 @@ end
 
 
 
-function CallBackFuncA(~,~,x)  % function for buttons
-    global MyContext
-    global ABCD;
-    flagInternal = 0;    
-    if (flagInteral == 0)
-        if (x~=1)
-        else
-           flagPause = 0;
-           switchOnOff = 0;
-           ABCD.flagPause = ~ABCD.flagPause; %Switch ON->OFF->ON -> and so on.
-           return;
-        end
-    end
-end
 
